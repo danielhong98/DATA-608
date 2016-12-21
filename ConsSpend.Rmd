@@ -1,0 +1,306 @@
+---
+title: "Construction Spending Forecast"
+author: "Daniel Hong"
+date: "December 10, 2016"
+output: html_document
+---
+The Value of Construction Put in Place Survey (VIP) provides monthly estimates of the total dollar value of construction work done in the U.S. The survey covers construction work done each month on new structures or improvements to existing structures for private and public sectors. Data estimates include the cost of labor and materials, cost of architectural and engineering work, overhead costs, interest and taxes paid during construction, and contractor's profits. Data collection and estimation activities begin on the first day after the reference month and continue for about three weeks. Reported data and estimates are for activity taking place during the previous calendar month. The survey periods in this analysis covers January 1993 to October 2016. Construction represents ~8% of US GDP and is a very closely watched indicator. After initial exploratory analysis and attempt will be made to forecast the Total number.
+
+Load libraries required for the analysis
+```{r}
+options(warn=-1)
+library(ggplot2)
+library(reshape2)
+library(urca)
+library(seasonal)
+library(lmtest)
+library(dplyr)
+library(gridBase)
+library(forecast)
+library(zoo)
+```
+
+The initial plot shows construction spend over time with the average spend. The barchart is just another view of the same data. The line plot shows seasonality in the data.
+```{r}
+setwd("C:/Users/dhong/Documents/R")
+con<-scan("totdata.txt")
+con<-ts(con, start=c(1993,1),freq=12)
+plot(con,main="Total Construction Spending", ylab="Millions of Dollars")
+abline(h=71535.10,col='blue',lwd=2)
+summary(con)
+sd(con)
+
+df<-read.table("cons_annual.txt", header = FALSE)
+df
+
+p <- ggplot(df, aes(V1, V2, group = 1)) + geom_bar(stat = "identity") + labs(x = "Year", y = "Spend $M", title = "Total Construction Spending")
+p
+```
+
+Decomposition of the time series shows the observed data broken down by random, seasonal and trend. Seasonal adjustment is made and unit root test is performed. First line chart is seasonally adjusted construction spend and the second plot shows the comparison between seasonally adjusted and non-seasonally adjusted data. First differences look stationary and similar to noise.
+```{r}
+dec_con<-decompose(con)
+plot(dec_con)
+con_sa<-con-dec_con$seasonal
+plot(con_sa)
+
+df1<-read.table("sa.txt", header = FALSE)
+df1
+
+qplot(V2, V3, data = df1, geom = "line",
+    xlab = "Seasonally Adjusted", ylab = "Non-Adjusted Construction Spend",
+    main = "Construction Spending Comparison")
+
+plot(diff(con_sa))
+```
+
+The function acf computes estimates of the autocovariance or autocorrelation function. Function pacf is the function used for the partial autocorrelations. A further look at acf and pacf shows the sample autocorrelations are close to 1, the first partial autocorrelation is also close to 1 but the others are not significant.
+```{r}
+par(mfrow=c(2,1), mar=c(3,5,3,3))
+acf(con_sa, main="Total Puplic Construction Spending (SA)")
+pacf(con_sa)
+
+acz <- acf(con_sa, plot=F)
+acd <- data.frame(lag=acz$lag, acf=acz$acf)
+ggplot(acd, aes(lag, acf)) + geom_area(fill="grey") +
+  geom_hline(yintercept=c(0.05, -0.05), linetype="dashed") +
+  theme_bw()
+```
+
+Significant but small autocorrelation
+```{r}
+acf(diff(log(con_sa)))
+pacf(diff(log(con_sa)))
+```
+
+Dickey-Fuller test of the null hypothesis to see whether a unit root is present in an autoregressive model.
+```{r}
+test <- ur.df(con_sa,type=c("trend"),lags=3,selectlags="AIC")
+summary(test)
+```
+
+Compare construction spend from October 1993 to September 2016 and the log
+```{r}
+con<-con[10:285]
+con<-ts(con, start=c(1993,10),freq=12)
+con
+plot(con,main= "Total Construction Spending")
+lncon<-log(con)
+plot(lncon,main= "Total Construction Spending")
+```
+
+Model 1 with trend, show linear trend. Notice the redsidual plot confirming seasonality.
+```{r}
+t<-(1:length(lncon))
+t2<-t^2
+model1<-lm(lncon~t+t2)
+summary(model1)
+
+dwtest(model1)
+
+plot(lncon, ylim=c(7.8,12),main="Total Construction Spending")
+trend<-fitted(model1)
+trend<-ts(trend, frequency=12, start=c(1993,10))
+lines(trend,col="blue",lwd=1.5)
+par(new=T)
+residuals<-lncon-trend
+plot(residuals,ylim=c(-0.35,1.5),ylab='',axes=F,main="Total Construction Spending")
+axis(4, pretty(c(-0.3,0.3)))
+par(mar=c(5.1, 4.1, 4.1, 2.1) + 1.2)
+abline(h=0,col='grey')
+mtext("Residuals",side=4,line=2,at=0)
+
+model1<-lm(lncon~t)
+
+plot(lncon, ylim=c(8.5,12),xlim=c(2010,2016),main="Trend")
+trend<-fitted(model1)
+trend<-ts(trend, frequency=12, start=c(1993,10))
+lines(trend,col="blue",lwd=1.5)
+par(new=T)
+residuals<-lncon-trend
+plot(residuals,ylim=c(-0.5,1.5),ylab='',axes=F,main="Total Construction Spending")
+axis(4, pretty(c(-0.4,0.4)))
+par(mar=c(5.1, 4.1, 4.1, 2.1) + 1.2)
+abline(h=0,col='grey')
+mtext("Residuals",side=4,line=2,at=0)
+
+par(mfrow=c(2,1), mar=c(3,5,3,3))
+acf(residuals)
+pacf(residuals)
+
+acz <- acf(residuals, plot=F)
+acd <- data.frame(lag=acz$lag, acf=acz$acf)
+ggplot(acd, aes(lag, acf)) + geom_area(fill="grey") +
+  geom_hline(yintercept=c(0.05, -0.05), linetype="dashed") +
+  theme_bw()
+```
+
+Model 2 with trend and seasonality, appears to be significant. The Durbin-Watson Test now gives a more reliable reading on serial autocorrelation. The plot shows that the residuals are predictable. 
+```{r}
+M1 = rep(c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M2 = rep(c(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M3 = rep(c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M4 = rep(c(0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M5 = rep(c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M6 = rep(c(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0), length(lncon)/12)
+M7 = rep(c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), length(lncon)/12)
+M8 = rep(c(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), length(lncon)/12)
+M9 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0), length(lncon)/12)
+M10 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0), length(lncon)/12)
+M11 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0), length(lncon)/12)
+M12 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1), length(lncon)/12)
+
+model2<-lm(lncon~0+t+t2+M1+M2+M3+M4+M5+M6+M7+M8+M9+M10+M11+M12)
+summary(model2)
+
+dwtest(model2)
+
+plot(lncon, ylim=c(7.8,12), main="Total Construction Spending")
+trend<-fitted(model2)
+trend<-ts(trend, frequency=12, start=c(1993,10))
+lines(trend,col="blue",lwd=1.5)
+
+plot(residuals,ylim=c(-0.35,1.5), ylab='',axes=F,main="Total Construction Spending")
+axis(4, pretty(c(-0.3,0.3)))
+par(mar=c(5.1, 4.1, 4.1, 2.1) + 1.2)
+abline(h=0,col='grey')
+mtext("Residuals",side=4,line=2,at=0)
+
+par(mfrow=c(2,1), mar=c(3,5,3,3))
+acf(residuals)
+pacf(residuals)
+```
+
+Model 3 with trend, seasonality and cylcical components. DW ~ 2 which shows it is no longer autocorrelated. Furthermore, the residuals from the acf shows that there are no patterns. The residuals also look to follow a normal distribution.
+```{r}
+best.order <- c(0, 0, 0)
+best.aic <- Inf
+for (q in 0:4) for (p in 0:4) {
+  fit.aic <- AIC(arima(residuals,order = c(p,0,q),method="ML",optim.control = list(maxit = 1000)))
+  print(c(p,q,fit.aic))
+  if (fit.aic < best.aic) {
+    best.order <- c(p, 0, q)
+    best.arma <- arima(residuals, order = best.order,method="ML",optim.control = list(maxit = 1000))
+    best.aic <- fit.aic
+  }
+}
+best.order
+
+model1und2<-model.matrix(~0+t+t2+M1+M2+M3+M4+M5+M6+M7+M8+M9+M10+M11+M12)
+model3<-arima(lncon,order=c(3,0,2),include.mean = FALSE,xreg=model1und2)
+model3
+
+model3$coef
+sqrt(diag(model3$var.coef))
+
+dw<-sum((model3$residuals - lag(model3$residuals))^2, na.rm = TRUE)/sum(model3$residuals^2, na.rm = TRUE)
+dw
+
+plot(lncon,yaxt="n",ylim=c(7.5,10.4),ylab="lncon",main="Total Construction Spending")
+trend<-lncon-model3$residuals
+trend<-ts(trend, frequency=12, start=c(1993,10))
+lines(trend,col="blue",lwd=1.5)
+axis(2, pretty(c(8,11)))
+par(new=T)
+residuals<-model3$residuals
+plot(residuals,ylim=c(-0.09,0.2),ylab='',axes=F)
+axis(4, pretty(c(-0.05,0.05)))
+par(mar=c(5.1, 4.1, 4.1, 2.1) + 1.2)
+abline(h=0,col='grey')
+mtext("Residuals",side=4,line=2,at=0)
+
+par(mfrow=c(2,1), mar=c(3,5,3,3))
+acf(residuals)
+pacf(residuals)
+
+hist(residuals, freq=F, breaks = 30, main="Residual Histogram", ylab="frequency density")
+```
+
+The in-sample forecast for two years takes a shorter period in order to compare the forecast vs. actuals.
+```{r}
+lncon2014<-lncon[1:(276-24)]
+lncon2014<-ts(lncon2014,frequency=12, start=c(1993,10))
+z<-(1:length(lncon2014))
+z2=z^2
+Mo1 = rep(c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo2 = rep(c(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo3 = rep(c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo4 = rep(c(0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo5 = rep(c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo6 = rep(c(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo7 = rep(c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), length(lncon2014)/12)
+Mo8 = rep(c(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), length(lncon2014)/12)
+Mo9 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0), length(lncon2014)/12)
+Mo10 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0), length(lncon2014)/12)
+Mo11 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0), length(lncon2014)/12)
+Mo12 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1), length(lncon2014)/12)
+model1and2.2014 <- model.matrix(~ 0 +z+z2+Mo1+Mo2+Mo3+Mo4+Mo5+Mo6+Mo7+Mo8+Mo9+Mo10+Mo11+Mo12)
+model3.2014 <- arima(lncon2014,order = c(1, 0, 1),include.mean = FALSE,xreg=model1and2.2014)
+model3.2014
+model3.2014$coef
+sqrt(diag(model3.2014$var.coef))
+```
+
+```{r}
+f<-(253:276)
+f2<-f^2
+FMo1 = rep(c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 24/12)
+FMo2 = rep(c(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 24/12)
+FMo3 = rep(c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0), 24/12)
+FMo4 = rep(c(0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0), 24/12)
+FMo5 = rep(c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0), 24/12)
+FMo6 = rep(c(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0), 24/12)
+FMo7 = rep(c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0), 24/12)
+FMo8 = rep(c(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0), 24/12)
+FMo9 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0), 24/12)
+FMo10 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0), 24/12)
+FMo11 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0), 24/12)
+FMo12 = rep(c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1), 24/12)
+FTrSeas2014.2016<-model.matrix(~0+f+f2+FMo1+FMo2+FMo3+FMo4+FMo5+FMo6+FMo7+FMo8+FMo9+FMo10+FMo11+FMo12)
+
+Forecast<-predict(model3.2014,24,newxreg=FTrSeas2014.2016)$pred
+Forecast<-exp(Forecast)
+Forecast
+
+UF<-predict(model3.2014,24,newxreg=FTrSeas2014.2016)$pred+1.96*predict(model3.2014,24,newxreg=FTrSeas2014.2016)$se
+UF<-exp(UF)
+UF
+LF<-predict(model3.2014,24,newxreg=FTrSeas2014.2016)$pred-1.96*predict(model3.2014,24,newxreg=FTrSeas2014.2016)$se
+LF<-exp(LF)
+
+
+plot(con,xlim=c(2012,2016), ylim=c(65000,100000),ylab="Millions of Dollars",main="2 Year In-sample Forecast",lwd=1.5)
+trend<-lncon-model3.2014$residuals
+trend<-exp(trend)
+lines(trend,col="green")
+lines(Forecast,col="blue")
+lines(UF,col="red")
+lines(LF,col="red")
+```
+
+Alternatively, a forecast can be done with Holt-Winters, the graph shows the continuous time series and confidence bands for the prediction.
+```{r}
+con1 = read.table("totdata_trans.txt", 
+               sep="\t",
+               fill=FALSE, 
+               strip.white=TRUE)
+
+head(con1)
+
+A <- ts(con1$V2, start=c(1993,1), frequency=12)
+A
+class(A)
+plot.ts(A)
+Ahw <- HoltWinters(A)
+class(Ahw)
+Ahw
+
+Ahw.p <- predict(Ahw, n.ahead=24) 
+Ahw.p
+plot(A, xlim=c(1993, 2018))
+lines(Ahw.p, col="red")
+fhw <- forecast(Ahw, h=24)
+fhw
+class(fhw)
+autoplot(fhw)
+```
